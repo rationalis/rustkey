@@ -1,8 +1,8 @@
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
-use std::sync::Mutex;
-use std::sync::mpsc::{Sender, Receiver};
+//use std::sync::Mutex;
+//use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,32 +31,64 @@ const USB_KBD_KEYCODE: [u8; 252] = [
 
 lazy_static!(
     static ref KEYCODE_MAP: [u8; 256] = reverse_map(&USB_KBD_KEYCODE);
-    static ref KBD_OUTPUT: Mutex<File> =
-        Mutex::new(OpenOptions::new().write(true).open("/dev/hidg0").unwrap());
 );
+
+// TODO: replace random arbitrary u8 with UsbKeycode where possible
+struct UsbKeycode {
+    data: u8
+}
+
+struct Report {
+    data: [u8; 8]
+}
+
+const NULL_REPORT: Report = Report { data: [0,0,0,0,0,0,0,0] };
+
+struct PressEvent {
+    usb_keycode: u8,
+    time: Instant
+}
+
+struct State {
+    pressed: Vec<PressEvent>
+}
+
+impl UsbKeycode {
+    fn from_evdev_code(ev: &evdev::raw::input_event) -> UsbKeycode {
+        let ev_code: usize = ev.code.try_into().unwrap();
+        UsbKeycode {
+            data: KEYCODE_MAP[ev_code]
+        }
+    }
+}
+
+fn char_report(c: u8) -> Report {
+    Report {
+        data: [0, 0, c, 0, 0, 0, 0, 0]
+    }
+}
 
 fn reverse_map(arr: &[u8]) -> [u8; 256] {
     let mut map: [u8; 256] = [0; 256];
     for (i,j) in arr.iter().enumerate() {
         map[*j as usize] = i as u8;
     }
-    return map;
+    map
 }
 
-fn send(c: u8) {
-    let report = [0, 0, c, 0, 0, 0, 0, 0];
-    KBD_OUTPUT.lock().unwrap().write(&report).unwrap();
-    let report = [0, 0, 0, 0, 0, 0, 0, 0];
-    KBD_OUTPUT.lock().unwrap().write(&report).unwrap();
+fn is_modifier(c: u8) -> bool {
+    c >= 224 && c <= 231
 }
 
-fn forward(ev: &evdev::raw::input_event) {
-    if ev._type == 1 && ev.value == 1 {
-        let keycode: usize = ev.code.try_into().unwrap();
-        let usb_keycode = KEYCODE_MAP[keycode];
-        if usb_keycode < 224 {
-            send(usb_keycode);
-        }
+fn modify(c: &mut Report, m: u8) {
+    match m {
+        224 | 228 => c.data[0] |= 1 << 0,
+        225 | 229 => c.data[0] |= 1 << 1,
+        226 | 230 => c.data[0] |= 1 << 2,
+        227 | 231 => c.data[0] |= 1 << 3,
+        // TODO: handle win(gui) taps; it's dual role by default on windows
+        // TODO: handle holding alt which is needed for alt-tabbing
+        _ => panic!()
     }
 }
 
@@ -79,33 +111,80 @@ fn main() {
     println!("{}", d);
     println!("Events:");
 
-    let (sender, receiver) = mpsc::channel::<evdev::raw::input_event>();
+    let (to_manager, manager_receiver) = mpsc::channel::<evdev::raw::input_event>();
+    let (to_writer, writer_receiver) = mpsc::channel::<Report>();
 
-    let child = thread::spawn(move || {
+    let writer = thread::spawn(move || {
+        let mut out: File =
+            OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
         loop {
-            forward(&receiver.recv().unwrap());
+            let r: Report = writer_receiver.recv().unwrap();
+            out.write(&r.data).unwrap();
         }
     });
 
-    let mut prev = Instant::now();
-    let mut accum = Duration::new(0, 0);
-    let mut counter = 0;
-    loop {
-        let mut sent_something = false;
-        for ev in d.events_no_sync().unwrap() {
-            // println!("{:?}", ev);
-            // forward(&ev);
-            sender.send(ev);
-            sent_something = true;
+    let manager = thread::spawn(move || {
+        let mut state: State = State { pressed: Vec::new() };
+        loop {
+            let ev = manager_receiver.recv().unwrap();
+            if ev._type == 1 {
+                let keycode: usize = ev.code.try_into().unwrap();
+                let usb_keycode = KEYCODE_MAP[keycode];
+                if usb_keycode >= 224 {
+                    // modifier keys
+                    if ev.value == 1 {
+                        // Note that this will record the time that the manager
+                        // thread processes a received event, as opposed to the
+                        // more accurate time at which the reader thread sends
+                        // the event.
+                        // TODO: attach time info in reader
+                        state.pressed.push(PressEvent{
+                            usb_keycode,
+                            time: Instant::now()
+                        });
+                    } else if ev.value == 0 {
+                        state.pressed.retain(|x| x.usb_keycode != usb_keycode);
+                    }
+                }
+                else if usb_keycode < 224 && ev.value == 1 {
+                    let mut c = char_report(usb_keycode);
+                    for press in &state.pressed {
+                        if is_modifier(press.usb_keycode) {
+                            modify(&mut c, press.usb_keycode);
+                        }
+                    }
+                    to_writer.send(c).unwrap();
+                    to_writer.send(NULL_REPORT).unwrap();
+                }
+            }
         }
-        let next = Instant::now();
-        let duration = next - prev;
-        if sent_something {
-            println!("{:?}", duration);
+    });
+
+    let reader = thread::spawn(move || {
+        let mut prev = Instant::now();
+        // let mut accum = Duration::new(0, 0);
+        // let mut counter = 0;
+        loop {
+            let mut sent_something = false;
+            for ev in d.events_no_sync().unwrap() {
+                // println!("{:?}", ev);
+                // forward(&ev);
+                to_manager.send(ev).unwrap();
+                sent_something = true;
+            }
+            let next = Instant::now();
+            let duration = next - prev;
+            if sent_something {
+                // println!("\n{:?}", duration);
+            }
+            // accum += duration;
+            // counter += 1;
+            // println!("{:?}", accum / counter);
+            prev = next;
         }
-        // accum += duration;
-        // counter += 1;
-        // println!("{:?}", accum / counter);
-        prev = next;
-    }
+    });
+
+    writer.join().unwrap();
+    manager.join().unwrap();
+    reader.join().unwrap();
 }
