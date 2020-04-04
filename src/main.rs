@@ -3,10 +3,13 @@ use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 //use std::sync::Mutex;
 //use std::sync::mpsc::{Sender, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use ctrlc;
 use lazy_static::lazy_static;
 
 // https://github.com/torvalds/linux/blob/master/drivers/hid/usbhid/usbkbd.c
@@ -33,24 +36,76 @@ lazy_static!(
     static ref KEYCODE_MAP: [u8; 256] = reverse_map(&USB_KBD_KEYCODE);
 );
 
-// TODO: replace random arbitrary u8 with UsbKeycode where possible
+#[derive(Clone, Copy)]
 struct UsbKeycode {
     data: u8
 }
 
 struct Report {
-    data: [u8; 8]
+    mod_byte: u8,
+    keys: [UsbKeycode; 6]
 }
 
-const NULL_REPORT: Report = Report { data: [0,0,0,0,0,0,0,0] };
-
 struct PressEvent {
-    usb_keycode: u8,
+    usb_keycode: UsbKeycode,
     time: Instant
 }
 
 struct State {
     pressed: Vec<PressEvent>
+}
+
+const NULL_KEY: UsbKeycode = UsbKeycode { data: 0 };
+
+impl Report {
+    const fn new() -> Report {
+        Report::single_key(NULL_KEY)
+    }
+
+    const fn single_key(key: UsbKeycode) -> Report {
+        let keys = [key, NULL_KEY, NULL_KEY, NULL_KEY, NULL_KEY, NULL_KEY];
+        Report {
+            mod_byte: 0,
+            keys
+        }
+    }
+
+    fn set_modifier(&mut self, m: &UsbKeycode) {
+        match m.data {
+            224 | 228 => self.mod_byte |= 1 << 0,
+            225 | 229 => self.mod_byte |= 1 << 1,
+            226 | 230 => self.mod_byte |= 1 << 2,
+            227 | 231 => self.mod_byte |= 1 << 3,
+            // TODO: handle win(gui) taps; it's dual role by default on windows
+            // TODO: handle holding alt which is needed for alt-tabbing
+            _ => panic!("Unrecognized modifier")
+        }
+    }
+
+    fn add_key(&mut self, key: UsbKeycode) {
+        if key.is_modifier() {
+            self.set_modifier(&key);
+            return;
+        }
+
+        for i in 0..6 {
+            if self.keys[i].data == 0 {
+                self.keys[i] = key;
+                return;
+            }
+        }
+
+        panic!("Exceeded 6KRO")
+    }
+
+    fn data(&self) -> [u8; 8] {
+        let mut report = [0; 8];
+        report[0] = self.mod_byte;
+        for i in 0..6 {
+            report[i+2] = self.keys[i].data;
+        }
+        report
+    }
 }
 
 impl UsbKeycode {
@@ -60,11 +115,9 @@ impl UsbKeycode {
             data: KEYCODE_MAP[ev_code]
         }
     }
-}
 
-fn char_report(c: u8) -> Report {
-    Report {
-        data: [0, 0, c, 0, 0, 0, 0, 0]
+    fn is_modifier(&self) -> bool {
+        self.data >= 224 && self.data <= 231
     }
 }
 
@@ -74,22 +127,6 @@ fn reverse_map(arr: &[u8]) -> [u8; 256] {
         map[*j as usize] = i as u8;
     }
     map
-}
-
-fn is_modifier(c: u8) -> bool {
-    c >= 224 && c <= 231
-}
-
-fn modify(c: &mut Report, m: u8) {
-    match m {
-        224 | 228 => c.data[0] |= 1 << 0,
-        225 | 229 => c.data[0] |= 1 << 1,
-        226 | 230 => c.data[0] |= 1 << 2,
-        227 | 231 => c.data[0] |= 1 << 3,
-        // TODO: handle win(gui) taps; it's dual role by default on windows
-        // TODO: handle holding alt which is needed for alt-tabbing
-        _ => panic!()
-    }
 }
 
 fn main() {
@@ -114,62 +151,82 @@ fn main() {
     let (to_manager, manager_receiver) = mpsc::channel::<evdev::raw::input_event>();
     let (to_writer, writer_receiver) = mpsc::channel::<Report>();
 
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).unwrap();
+
     let writer = thread::spawn(move || {
         let mut out: File =
             OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
         loop {
-            let r: Report = writer_receiver.recv().unwrap();
-            out.write(&r.data).unwrap();
+            let r = writer_receiver.recv();
+            if r.is_err() {
+                break;
+            }
+            let r: Report = r.unwrap();
+            out.write(&r.data()).unwrap();
         }
     });
 
     let manager = thread::spawn(move || {
         let mut state: State = State { pressed: Vec::new() };
-        loop {
+        while running.load(Ordering::SeqCst) {
             let ev = manager_receiver.recv().unwrap();
             if ev._type == 1 {
-                let keycode: usize = ev.code.try_into().unwrap();
-                let usb_keycode = KEYCODE_MAP[keycode];
-                if usb_keycode >= 224 {
-                    // modifier keys
-                    if ev.value == 1 {
-                        // Note that this will record the time that the manager
-                        // thread processes a received event, as opposed to the
-                        // more accurate time at which the reader thread sends
-                        // the event.
-                        // TODO: attach time info in reader
-                        state.pressed.push(PressEvent{
-                            usb_keycode,
-                            time: Instant::now()
-                        });
-                    } else if ev.value == 0 {
-                        state.pressed.retain(|x| x.usb_keycode != usb_keycode);
-                    }
+                let was_empty = state.pressed.is_empty();
+                let usb_keycode = UsbKeycode::from_evdev_code(&ev);
+                if ev.value == 1 {
+                    // Note that this will record the time that the manager
+                    // thread processes a received event, as opposed to the
+                    // more accurate time at which the reader thread sends
+                    // the event.
+                    // TODO: attach time info in reader
+                    state.pressed.push(PressEvent{
+                        usb_keycode,
+                        time: Instant::now()
+                    });
+                } else if ev.value == 0 {
+                    state.pressed.retain(|x| x.usb_keycode.data != usb_keycode.data);
                 }
-                else if usb_keycode < 224 && ev.value == 1 {
-                    let mut c = char_report(usb_keycode);
+
+                if ev.value == 0 || ev.value == 1 {
+                    let mut report = Report::new();
                     for press in &state.pressed {
-                        if is_modifier(press.usb_keycode) {
-                            modify(&mut c, press.usb_keycode);
-                        }
+                        report.add_key(press.usb_keycode);
                     }
-                    to_writer.send(c).unwrap();
-                    to_writer.send(NULL_REPORT).unwrap();
+                    to_writer.send(report).unwrap();
                 }
+                // if usb_keycode < 224 && ev.value == 1 {
+                //     let mut c = Report::single_key(usb_keycode);
+                //     for press in &state.pressed {
+                //         if is_modifier(press.usb_keycode) {
+                //             modify(&mut c, press.usb_keycode);
+                //         }
+                //     }
+                //     to_writer.send(c).unwrap();
+                //     to_writer.send(NULL_REPORT).unwrap();
+                // }
             }
         }
+        to_writer.send(Report::new()).unwrap();
     });
 
     let reader = thread::spawn(move || {
         let mut prev = Instant::now();
         // let mut accum = Duration::new(0, 0);
         // let mut counter = 0;
-        loop {
+        'main: loop {
             let mut sent_something = false;
             for ev in d.events_no_sync().unwrap() {
                 // println!("{:?}", ev);
                 // forward(&ev);
-                to_manager.send(ev).unwrap();
+                let res = to_manager.send(ev);
+                if res.is_err() {
+                    break 'main;
+                }
                 sent_something = true;
             }
             let next = Instant::now();
@@ -184,7 +241,5 @@ fn main() {
         }
     });
 
-    writer.join().unwrap();
     manager.join().unwrap();
-    reader.join().unwrap();
 }
