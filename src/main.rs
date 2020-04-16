@@ -34,6 +34,14 @@ lazy_static!(
     static ref KEYCODE_MAP: [u8; 256] = reverse_map(&USB_KBD_KEYCODE);
 );
 
+type FilterFn = Box<dyn Fn(State) -> State>;
+
+#[derive(Clone)]
+enum EventType {
+    KeyDown,
+    KeyUp
+}
+
 #[derive(Clone, Copy)]
 struct UsbKeycode {
     data: u8
@@ -47,16 +55,13 @@ struct Report {
 #[derive(Clone)]
 struct PressEvent {
     usb_keycode: UsbKeycode,
+    event_type: EventType,
     time: SystemTime
 }
 
 #[derive(Clone)]
 struct State {
     pressed: Vec<PressEvent>
-}
-
-struct Keymap {
-    map: [u8; 256]
 }
 
 const NULL_KEY: UsbKeycode = UsbKeycode { data: 0 };
@@ -162,7 +167,7 @@ fn main() {
         r.store(false, Ordering::SeqCst);
     }).unwrap();
 
-    let writer = thread::spawn(move || {
+    let _writer = thread::spawn(move || {
         let mut out: File =
             OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
         loop {
@@ -180,9 +185,9 @@ fn main() {
         while running.load(Ordering::SeqCst) {
             let ev = manager_receiver.recv().unwrap();
             if ev._type == 1 {
-                let was_empty = state.pressed.is_empty();
+                // let was_empty = state.pressed.is_empty();
                 let usb_keycode = UsbKeycode::from_evdev_code(&ev);
-                if ev.value == 1 {
+                if ev.value == 0 || ev.value == 1 {
                     let secs = ev.time.tv_sec;
                     let usecs = ev.time.tv_usec;
                     let time = UNIX_EPOCH
@@ -191,35 +196,32 @@ fn main() {
                     // println!("{:?}", SystemTime::now().duration_since(time).unwrap());
                     state.pressed.push(PressEvent{
                         usb_keycode,
+                        event_type: match ev.value {
+                            0 => EventType::KeyDown,
+                            1 => EventType::KeyUp,
+                            _ => unreachable!()
+                        },
                         time
                     });
-                } else if ev.value == 0 {
-                    state.pressed.retain(|x| x.usb_keycode.data != usb_keycode.data);
-                }
 
-                if ev.value == 0 || ev.value == 1 {
+                    // do processing
+                    if ev.value == 0 {
+                        state.pressed.retain(|x| x.usb_keycode.data != usb_keycode.data);
+                    }
+                    // end processing
+
                     let mut report = Report::new();
                     for press in &state.pressed {
                         report.add_key(press.usb_keycode);
                     }
                     to_writer.send(report).unwrap();
                 }
-                // if usb_keycode < 224 && ev.value == 1 {
-                //     let mut c = Report::single_key(usb_keycode);
-                //     for press in &state.pressed {
-                //         if is_modifier(press.usb_keycode) {
-                //             modify(&mut c, press.usb_keycode);
-                //         }
-                //     }
-                //     to_writer.send(c).unwrap();
-                //     to_writer.send(NULL_REPORT).unwrap();
-                // }
             }
         }
         to_writer.send(Report::new()).unwrap();
     });
 
-    let reader = thread::spawn(move || {
+    let _reader = thread::spawn(move || {
         let mut prev = SystemTime::now();
         // let mut accum = Duration::new(0, 0);
         // let mut counter = 0;
