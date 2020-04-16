@@ -1,19 +1,17 @@
 use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
-//use std::sync::Mutex;
-//use std::sync::mpsc::{Sender, Receiver};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ctrlc;
 use lazy_static::lazy_static;
 
 // https://github.com/torvalds/linux/blob/master/drivers/hid/usbhid/usbkbd.c
-const USB_KBD_KEYCODE: [u8; 252] = [
+const USB_KBD_KEYCODE: [u8; 256] = [
 	  0,  0,  0,  0, 30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38,
 	 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45, 21, 44,  2,  3,
 	  4,  5,  6,  7,  8,  9, 10, 11, 28,  1, 14, 15, 57, 12, 13, 26,
@@ -29,7 +27,7 @@ const USB_KBD_KEYCODE: [u8; 252] = [
 	  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
 	  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
 	 29, 42, 56,125, 97, 54,100,126,164,166,165,163,161,115,114,113,
-	150,158,159,128,136,177,178,176,142,152,173,140
+	150,158,159,128,136,177,178,176,142,152,173,140,  0,  0,  0,  0
 ];
 
 lazy_static!(
@@ -46,13 +44,19 @@ struct Report {
     keys: [UsbKeycode; 6]
 }
 
+#[derive(Clone)]
 struct PressEvent {
     usb_keycode: UsbKeycode,
-    time: Instant
+    time: SystemTime
 }
 
+#[derive(Clone)]
 struct State {
     pressed: Vec<PressEvent>
+}
+
+struct Keymap {
+    map: [u8; 256]
 }
 
 const NULL_KEY: UsbKeycode = UsbKeycode { data: 0 };
@@ -179,14 +183,15 @@ fn main() {
                 let was_empty = state.pressed.is_empty();
                 let usb_keycode = UsbKeycode::from_evdev_code(&ev);
                 if ev.value == 1 {
-                    // Note that this will record the time that the manager
-                    // thread processes a received event, as opposed to the
-                    // more accurate time at which the reader thread sends
-                    // the event.
-                    // TODO: attach time info in reader
+                    let secs = ev.time.tv_sec;
+                    let usecs = ev.time.tv_usec;
+                    let time = UNIX_EPOCH
+                        + Duration::from_secs(secs.try_into().unwrap())
+                        + Duration::from_micros(usecs.try_into().unwrap());
+                    // println!("{:?}", SystemTime::now().duration_since(time).unwrap());
                     state.pressed.push(PressEvent{
                         usb_keycode,
-                        time: Instant::now()
+                        time
                     });
                 } else if ev.value == 0 {
                     state.pressed.retain(|x| x.usb_keycode.data != usb_keycode.data);
@@ -215,7 +220,7 @@ fn main() {
     });
 
     let reader = thread::spawn(move || {
-        let mut prev = Instant::now();
+        let mut prev = SystemTime::now();
         // let mut accum = Duration::new(0, 0);
         // let mut counter = 0;
         'main: loop {
@@ -229,8 +234,8 @@ fn main() {
                 }
                 sent_something = true;
             }
-            let next = Instant::now();
-            let duration = next - prev;
+            let next = SystemTime::now();
+            let duration = next.duration_since(prev).unwrap();
             if sent_something {
                 // println!("\n{:?}", duration);
             }
