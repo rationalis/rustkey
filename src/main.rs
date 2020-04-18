@@ -193,6 +193,13 @@ fn main() {
                     let time = UNIX_EPOCH
                         + Duration::from_secs(secs.try_into().unwrap())
                         + Duration::from_micros(usecs.try_into().unwrap());
+
+                    // This typically measured ~100us +/- 50us of delay between
+                    // the time at which this thread reads the event, and the
+                    // timestamp evdev attaches to it. While this seems quite
+                    // unlikely to affect anything, in principle using the
+                    // evdev timestamp is more precise.
+
                     // println!("{:?}", SystemTime::now().duration_since(time).unwrap());
                     state.pressed.push(PressEvent{
                         usb_keycode,
