@@ -181,9 +181,16 @@ fn main() {
     });
 
     let manager = thread::spawn(move || {
+        use std::sync::mpsc::RecvTimeoutError::*;
         let mut state: State = State { pressed: Vec::new() };
         while running.load(Ordering::SeqCst) {
-            let ev = manager_receiver.recv().unwrap();
+            let ev = manager_receiver.recv_timeout(Duration::from_millis(10));
+            let ev = match ev {
+                Err(Timeout) => { continue; }
+                Err(Disconnected) => { break; }
+                Ok(e) => e
+            };
+
             if ev._type == 1 {
                 // let was_empty = state.pressed.is_empty();
                 let usb_keycode = UsbKeycode::from_evdev_code(&ev);
