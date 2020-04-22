@@ -10,6 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ctrlc;
 use lazy_static::lazy_static;
 
+mod filters;
+use filters::*;
+
 // https://github.com/torvalds/linux/blob/master/drivers/hid/usbhid/usbkbd.c
 const USB_KBD_KEYCODE: [u8; 256] = [
 	  0,  0,  0,  0, 30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38,
@@ -34,20 +37,18 @@ lazy_static!(
     static ref KEYCODE_MAP: [u8; 256] = reverse_map(&USB_KBD_KEYCODE);
 );
 
-type FilterFn = Box<dyn Fn(State) -> State>;
-
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum EventType {
     KeyDown,
     KeyUp
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct UsbKeycode {
     data: u8
 }
 
-struct Report {
+pub struct Report {
     mod_byte: u8,
     keys: [UsbKeycode; 6]
 }
@@ -60,7 +61,7 @@ struct PressEvent {
 }
 
 #[derive(Clone)]
-struct State {
+pub struct State {
     pressed: Vec<PressEvent>
 }
 
@@ -218,17 +219,8 @@ fn main() {
                         time
                     });
 
-                    // do processing
-                    if ev.value == 0 {
-                        state.pressed.retain(|x| x.usb_keycode.data != usb_keycode.data);
-                    }
-                    // end processing
-
-                    let mut report = Report::new();
-                    for press in &state.pressed {
-                        report.add_key(press.usb_keycode);
-                    }
-                    to_writer.send(report).unwrap();
+                    let direct_passthrough: FilterFn = &direct_passthrough;
+                    state = direct_passthrough(state, &to_writer);
                 }
             }
         }
