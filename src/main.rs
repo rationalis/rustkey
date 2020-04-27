@@ -10,7 +10,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ctrlc;
 use lazy_static::lazy_static;
 
+mod datatypes;
 mod filters;
+
+use datatypes::*;
 use filters::*;
 
 // https://github.com/torvalds/linux/blob/master/drivers/hid/usbhid/usbkbd.c
@@ -37,32 +40,20 @@ lazy_static!(
     static ref KEYCODE_MAP: [u8; 256] = reverse_map(&USB_KBD_KEYCODE);
 );
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EventType {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventType {
     KeyDown,
     KeyUp
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct UsbKeycode {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsbKeycode {
     data: u8
 }
 
 pub struct Report {
     mod_byte: u8,
     keys: [UsbKeycode; 6]
-}
-
-#[derive(Clone)]
-struct PressEvent {
-    usb_keycode: UsbKeycode,
-    event_type: EventType,
-    time: SystemTime
-}
-
-#[derive(Clone)]
-pub struct State {
-    pressed: Vec<PressEvent>
 }
 
 const NULL_KEY: UsbKeycode = UsbKeycode { data: 0 };
@@ -183,7 +174,7 @@ fn main() {
 
     let manager = thread::spawn(move || {
         use std::sync::mpsc::RecvTimeoutError::*;
-        let mut state: State = State { pressed: Vec::new() };
+        let mut state: State = State::default();
         while running.load(Ordering::SeqCst) {
             let ev = manager_receiver.recv_timeout(Duration::from_millis(10));
             let ev = match ev {
@@ -209,18 +200,17 @@ fn main() {
                     // evdev timestamp is more precise.
 
                     // println!("{:?}", SystemTime::now().duration_since(time).unwrap());
-                    state.pressed.push(PressEvent{
+                    state.push(PressEvent::new(
                         usb_keycode,
-                        event_type: match ev.value {
-                            0 => EventType::KeyDown,
-                            1 => EventType::KeyUp,
+                        match ev.value {
+                            0 => EventType::KeyUp,
+                            1 => EventType::KeyDown,
                             _ => unreachable!()
                         },
-                        time
-                    });
+                        time));
 
-                    let direct_passthrough: FilterFn = &direct_passthrough;
-                    state = direct_passthrough(state, &to_writer);
+                    direct_passthrough(&mut state, &to_writer);
+                    direct_report(&mut state, &to_writer);
                 }
             }
         }

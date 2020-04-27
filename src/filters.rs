@@ -3,27 +3,34 @@ use crate::*;
 use std::sync::mpsc::Sender;
 
 pub type OutChannel<'a> = &'a Sender<Report>;
-pub type FilterFn<'a> = &'a dyn Fn(State, OutChannel) -> State;
+pub type FilterFn<'a> = &'a dyn Fn(&mut State, OutChannel);
 
-pub fn direct_passthrough(mut state: State, writer: OutChannel) -> State {
-    let ev = match state.pressed.last() {
-        Some(e) => e,
-        None => { return state; }
-    };
+pub fn direct_passthrough(state: &mut State, writer: OutChannel) {
+    //println!("{:?}", state);
+    let (pressed, mut hist) = state.view();
+    let mut released = Vec::new();
 
-    let event_type = ev.event_type;
-    let keycode = ev.usb_keycode;
-
-    if event_type == EventType::KeyDown {
-        state.pressed.retain(|x| x.usb_keycode != keycode);
+    for ev in hist.iter_mut().rev() {
+        use EventType::*;
+        let keycode = ev.usb_keycode();
+        match ev.event_type() {
+            KeyUp => {
+                ev.consume();
+                released.push(keycode);
+            }
+            KeyDown => {
+                if released.contains(&keycode) {
+                    ev.consume();
+                } else {
+                    ev.handle();
+                    pressed.push(keycode);
+                }
+            }
+        }
     }
+    //println!("{:?}", state);
+}
 
-    let mut report = Report::new();
-    for press in &state.pressed {
-        report.add_key(press.usb_keycode);
-    }
-
-    writer.send(report).unwrap();
-
-    state
+pub fn direct_report(state: &mut State, writer: OutChannel) {
+    writer.send(state.report()).unwrap();
 }

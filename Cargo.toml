@@ -5,7 +5,8 @@ authors = ["Jimmy Ye <jiy162@ucsd.edu>"]
 edition = "2018"
 
 [dependencies]
-evdev = "0.10.1"
-lazy_static = "1.4.0"
 ctrlc = "3.1.4"
+evdev = "0.10.1"
+getset = "0.1.0"
+lazy_static = "1.4.0"
 
