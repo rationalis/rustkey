@@ -2,6 +2,8 @@ use crate::*;
 
 use getset::{Getters, CopyGetters};
 
+pub type StateView<'a> = (&'a mut Vec<UsbKeycode>, Vec<&'a mut PressEvent>);
+
 #[derive(Clone, Debug, Getters, CopyGetters)]
 pub struct PressEvent {
     pub sim_keycode: UsbKeycode,
@@ -87,9 +89,8 @@ impl State {
         self.pressed.clear();
     }
 
-    pub fn view(&mut self) -> (&mut Vec<UsbKeycode>, Vec<&mut PressEvent>) { //impl DoubleEndedIterator<Item=&mut PressEvent>) {
+    pub fn view(&mut self) -> StateView {
         (&mut self.pressed,
-         //self.history.iter_mut().filter(|ev| ev.status == Unhandled))
          self.history.iter_mut().filter(|ev| ev.status == Unhandled).collect())
     }
 

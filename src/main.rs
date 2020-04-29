@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ctrlc;
 use lazy_static::lazy_static;
+use simplelog::*;
 
 mod datatypes;
 mod filters;
@@ -131,6 +132,8 @@ fn reverse_map(arr: &[u8]) -> [u8; 256] {
 }
 
 fn main() {
+    let _ = SimpleLogger::init(LevelFilter::Debug, Config::default()).unwrap();
+
     let mut args = std::env::args_os();
     let mut d;
     if args.len() > 1 {
@@ -209,6 +212,7 @@ fn main() {
                         },
                         time));
 
+                    chording(&mut state, &to_writer);
                     direct_passthrough(&mut state, &to_writer);
                     direct_report(&mut state, &to_writer);
                 }

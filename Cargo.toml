@@ -9,4 +9,6 @@ ctrlc = "3.1.4"
 evdev = "0.10.1"
 getset = "0.1.0"
 lazy_static = "1.4.0"
+log = "0.4"
+simplelog = "0.7.6"
 
