@@ -203,14 +203,13 @@ fn main() {
                     // evdev timestamp is more precise.
 
                     // println!("{:?}", SystemTime::now().duration_since(time).unwrap());
-                    state.push(PressEvent::new(
-                        usb_keycode,
-                        match ev.value {
-                            0 => EventType::KeyUp,
-                            1 => EventType::KeyDown,
-                            _ => unreachable!()
-                        },
-                        time));
+                    state.push(usb_keycode,
+                               match ev.value {
+                                   0 => EventType::KeyUp,
+                                   1 => EventType::KeyDown,
+                                   _ => unreachable!()
+                               },
+                               time);
 
                     chording(&mut state, &to_writer);
                     direct_passthrough(&mut state, &to_writer);

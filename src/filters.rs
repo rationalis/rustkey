@@ -12,19 +12,14 @@ pub fn chording(state: &mut State, writer: OutChannel) {
     let (pressed, mut hist) = state.view();
     let chord_keys = [79, 80, 81, 82];
     let mut pressed_chord_keys = Vec::new();
-    let mut released = Vec::new();
 
     use EventType::*;
     for ev in hist.iter_mut().rev() {
         let key = ev.usb_keycode().data;
         if chord_keys.contains(&key) {
             ev.handle();
-            if ev.event_type() == KeyDown && !released.contains(&key) {
+            if ev.pressed() {
                 pressed_chord_keys.push(key);
-            } else if ev.event_type() == KeyUp {
-                released.push(key);
-            } else if released.contains(&key) {
-                // pass
             }
         }
     }
@@ -38,24 +33,14 @@ pub fn chording(state: &mut State, writer: OutChannel) {
 pub fn direct_passthrough(state: &mut State, writer: OutChannel) {
     trace!("{:?}", state);
     let (pressed, mut hist) = state.view();
-    let mut released = Vec::new();
 
     for ev in hist.iter_mut().rev() {
-        use EventType::*;
         let keycode = ev.usb_keycode();
-        match ev.event_type() {
-            KeyUp => {
-                ev.consume();
-                released.push(keycode);
-            }
-            KeyDown => {
-                if released.contains(&keycode) {
-                    ev.consume();
-                } else {
-                    ev.handle();
-                    pressed.push(keycode);
-                }
-            }
+        if ev.released() {
+            ev.consume();
+        } else {
+            ev.handle();
+            pressed.push(keycode);
         }
     }
     trace!("{:?}", state);

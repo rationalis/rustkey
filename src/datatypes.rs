@@ -12,10 +12,9 @@ pub struct PressEvent {
     usb_keycode: UsbKeycode,
 
     #[getset(get_copy = "pub")]
-    event_type: EventType,
+    keydown_time: SystemTime,
 
-    #[getset(get_copy = "pub")]
-    time: SystemTime,
+    pub keyup_time: Option<SystemTime>,
 
     #[getset(get_copy = "pub")]
     status: PressStatus
@@ -37,14 +36,13 @@ pub enum PressStatus {
 use PressStatus::*;
 
 impl PressEvent {
-    pub fn new(usb_keycode: UsbKeycode, event_type: EventType, time: SystemTime)
-               -> Self {
+    pub fn new(usb_keycode: UsbKeycode, time: SystemTime) -> Self {
 
         PressEvent {
             usb_keycode,
             sim_keycode: usb_keycode,
-            event_type,
-            time,
+            keydown_time: time,
+            keyup_time: None,
             status: Unhandled
         }
     }
@@ -58,6 +56,14 @@ impl PressEvent {
         debug_assert!(self.status == Unhandled);
         self.status = Handled;
     }
+
+    pub fn pressed(&self) -> bool {
+        self.keyup_time.is_none()
+    }
+
+    pub fn released(&self) -> bool {
+        self.keyup_time.is_some()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -66,9 +72,70 @@ pub struct State {
     pub pressed: Vec<UsbKeycode>
 }
 
+//pub type Predicate = impl FnMut(&&mut PressEvent) -> bool;
+
 impl State {
-    pub fn push(&mut self, ev: PressEvent) {
-        self.history.push(ev);
+
+    pub fn matcher(
+        key: Option<Vec<UsbKeycode>>,
+        released: Option<bool>,
+        pressed_before: Option<SystemTime>,
+        extends_past: Option<SystemTime>) ->
+    impl FnMut(&&mut PressEvent) -> bool
+    {
+        move |e| {
+            let key_match =
+                match (key.as_ref(), e.usb_keycode()) {
+                    (None, _) => true,
+                    (Some(ks), k) => ks.contains(&k),
+                    _ => false
+                };
+
+            let released_match =
+                match (released, e.keyup_time) {
+                    (None, _)
+                        | (Some(true), Some(_))
+                        | (Some(false), None) => true,
+                    _ => false
+                };
+
+            let pressed_before_match =
+                match pressed_before {
+                    None => true,
+                    Some(t) => e.keydown_time() <= t
+                };
+
+            let extends_past_match =
+                match (extends_past, e.keyup_time) {
+                    (None, _) => true,
+                    (Some(t), Some(t2)) => t2 >= t,
+                    (Some(_), None) => false // TODO: should compare against now
+                };
+
+            key_match
+                && released_match
+                && pressed_before_match
+                && extends_past_match
+        }
+    }
+
+    pub fn push(&mut self, key: UsbKeycode, ev_type: EventType,
+                time: SystemTime) {
+        match ev_type {
+            EventType::KeyDown => {
+                self.history.push(PressEvent::new(key, time));
+            }
+            EventType::KeyUp => {
+                let ev =
+                    self.history.iter_mut().rev().find(Self::matcher(
+                        Some(vec![key]),
+                        Some(false),
+                        None,
+                        None
+                    )).unwrap();
+                ev.keyup_time = Some(time);
+            }
+        }
     }
 
     pub fn reset(&mut self) {
