@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ctrlc;
 use lazy_static::lazy_static;
-use simplelog::*;
 use log::*;
+use simplelog::*;
 
 mod datatypes;
 mod filters;
@@ -38,24 +38,24 @@ const USB_KBD_KEYCODE: [u8; 256] = [
 	150,158,159,128,136,177,178,176,142,152,173,140,  0,  0,  0,  0
 ];
 
-lazy_static!(
+lazy_static! {
     static ref KEYCODE_MAP: [u8; 256] = reverse_map(&USB_KBD_KEYCODE);
-);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventType {
     KeyDown,
-    KeyUp
+    KeyUp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UsbKeycode {
-    data: u8
+    data: u8,
 }
 
 pub struct Report {
     mod_byte: u8,
-    keys: [UsbKeycode; 6]
+    keys: [UsbKeycode; 6],
 }
 
 const NULL_KEY: UsbKeycode = UsbKeycode { data: 0 };
@@ -67,10 +67,7 @@ impl Report {
 
     const fn single_key(key: UsbKeycode) -> Report {
         let keys = [key, NULL_KEY, NULL_KEY, NULL_KEY, NULL_KEY, NULL_KEY];
-        Report {
-            mod_byte: 0,
-            keys
-        }
+        Report { mod_byte: 0, keys }
     }
 
     fn set_modifier(&mut self, m: &UsbKeycode) {
@@ -81,7 +78,7 @@ impl Report {
             227 | 231 => self.mod_byte |= 1 << 3,
             // TODO: handle win(gui) taps; it's dual role by default on windows
             // TODO: handle holding alt which is needed for alt-tabbing
-            _ => panic!("Unrecognized modifier")
+            _ => panic!("Unrecognized modifier"),
         }
     }
 
@@ -105,7 +102,7 @@ impl Report {
         let mut report = [0; 8];
         report[0] = self.mod_byte;
         for i in 0..6 {
-            report[i+2] = self.keys[i].data;
+            report[i + 2] = self.keys[i].data;
         }
         report
     }
@@ -122,7 +119,7 @@ impl From<&evdev::raw::input_event> for UsbKeycode {
         // TODO: handle other non-standard-keyboard keys
         let ev_code: usize = ev.code.try_into().unwrap();
         UsbKeycode {
-            data: KEYCODE_MAP[ev_code]
+            data: KEYCODE_MAP[ev_code],
         }
     }
 }
@@ -130,15 +127,14 @@ impl From<&evdev::raw::input_event> for UsbKeycode {
 impl From<&evdev::Key> for UsbKeycode {
     fn from(k: &evdev::Key) -> Self {
         UsbKeycode {
-            data: KEYCODE_MAP[*k as usize]
+            data: KEYCODE_MAP[*k as usize],
         }
     }
 }
 
-
 fn reverse_map(arr: &[u8]) -> [u8; 256] {
     let mut map: [u8; 256] = [0; 256];
-    for (i,j) in arr.iter().enumerate() {
+    for (i, j) in arr.iter().enumerate() {
         map[*j as usize] = i as u8;
     }
     map
@@ -167,17 +163,18 @@ fn main() {
 
     let (to_manager, manager_receiver) = mpsc::channel::<evdev::raw::input_event>();
     let (to_writer, writer_receiver) = mpsc::channel::<Report>();
+    let to_writer_err = to_writer.clone();
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
-    }).unwrap();
+    })
+    .unwrap();
 
     let _writer = thread::spawn(move || {
-        let mut out: File =
-            OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
+        let mut out: File = OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
         loop {
             let r = writer_receiver.recv();
             if r.is_err() {
@@ -191,10 +188,11 @@ fn main() {
     let manager = thread::spawn(move || {
         use std::sync::mpsc::RecvTimeoutError::*;
         let mut state: State = State::default();
-        let mut filters: Vec<FilterFn> =
-            vec![Box::new(relaxed_chording),
-                 Box::new(direct_passthrough),
-                 Box::new(direct_report)];
+        let mut filters: Vec<FilterFn> = vec![
+            Box::new(relaxed_chording),
+            Box::new(direct_passthrough),
+            Box::new(direct_report),
+        ];
         let mut prev_loop: SystemTime = SystemTime::now();
         let mut i: i64 = 0;
         let mut s: u128 = 0;
@@ -215,8 +213,10 @@ fn main() {
                     state.update(&mut filters, &to_writer);
                     continue;
                 }
-                Err(Disconnected) => { break; }
-                Ok(e) => e
+                Err(Disconnected) => {
+                    break;
+                }
+                Ok(e) => e,
             };
 
             if ev._type == 1 {
@@ -236,13 +236,15 @@ fn main() {
                     // evdev timestamp is more precise.
 
                     // println!("{:?}", SystemTime::now().duration_since(time).unwrap());
-                    state.push(usb_keycode,
-                               match ev.value {
-                                   0 => EventType::KeyUp,
-                                   1 => EventType::KeyDown,
-                                   _ => unreachable!()
-                               },
-                               time);
+                    state.push(
+                        usb_keycode,
+                        match ev.value {
+                            0 => EventType::KeyUp,
+                            1 => EventType::KeyDown,
+                            _ => unreachable!(),
+                        },
+                        time,
+                    );
                     state.update(&mut filters, &to_writer);
                 }
             }
@@ -250,33 +252,26 @@ fn main() {
         to_writer.send(Report::new()).unwrap();
     });
 
-    let _reader = thread::spawn(move || {
-        let mut prev = SystemTime::now();
-        // let mut accum = Duration::new(0, 0);
-        // let mut counter = 0;
-        'main: loop {
-            let mut sent_something = false;
-            for ev in d.events_no_sync().unwrap() {
-                // println!("{:?}", ev);
-                // forward(&ev);
-                let res = to_manager.send(ev);
-                if res.is_err() {
-                    break 'main;
-                }
-                sent_something = true;
+    let reader = thread::spawn(move || 'main: loop {
+        for ev in d.events_no_sync().unwrap() {
+            let res = to_manager.send(ev);
+            if res.is_err() {
+                break 'main;
             }
-            let next = SystemTime::now();
-            let duration = next.duration_since(prev).unwrap();
-            if sent_something {
-                // println!("\n{:?}", duration);
-            }
-            // accum += duration;
-            // counter += 1;
-            // println!("{:?}", accum / counter);
-            prev = next;
         }
     });
 
-    // TODO: match on Err from manager/reader and send null report
-    manager.join().unwrap();
+    match manager.join() {
+        Err(_) => {
+            to_writer_err.send(Report::new()).unwrap();
+        }
+        _ => (),
+    }
+
+    match reader.join() {
+        Err(_) => {
+            to_writer_err.send(Report::new()).unwrap();
+        }
+        _ => (),
+    }
 }
