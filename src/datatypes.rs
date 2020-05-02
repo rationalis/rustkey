@@ -47,6 +47,10 @@ impl PressEvent {
         }
     }
 
+    pub fn completed(&self) -> bool {
+        self.status == Consumed && self.keyup_time.is_some()
+    }
+
     pub fn consume(&mut self) {
         debug_assert!(self.status == Unhandled);
         self.status = Consumed;
@@ -68,8 +72,8 @@ impl PressEvent {
 
 #[derive(Debug, Default)]
 pub struct State {
-    pub history: Vec<PressEvent>,
-    pub pressed: Vec<UsbKeycode>
+    history: Vec<PressEvent>,
+    pressed: Vec<UsbKeycode>,
 }
 
 //pub type Predicate = impl FnMut(&&mut PressEvent) -> bool;
@@ -138,18 +142,25 @@ impl State {
         }
     }
 
+    pub fn update(&mut self, filters: &mut Vec<FilterFn>, writer: OutChannel) {
+        self.reset();
+        for filter in filters {
+            filter(self, writer);
+        }
+    }
+
     pub fn reset(&mut self) {
-        let mut all_consumed = true;
+        let mut all_completed = true;
         for ev in self.history.iter_mut() {
-            if ev.status != Consumed {
-                all_consumed = false;
+            if !ev.completed() {
+                all_completed = false;
             }
             if ev.status == Handled {
                 ev.status = Unhandled;
             }
         }
 
-        if all_consumed {
+        if all_completed {
             self.history.clear();
         }
 
@@ -166,7 +177,6 @@ impl State {
         for key in &self.pressed {
             report.add_key(*key);
         }
-        self.reset();
         report
     }
 }

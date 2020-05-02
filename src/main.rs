@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ctrlc;
 use lazy_static::lazy_static;
 use simplelog::*;
+use log::*;
 
 mod datatypes;
 mod filters;
@@ -126,10 +127,10 @@ impl From<&evdev::raw::input_event> for UsbKeycode {
     }
 }
 
-impl From<evdev::Key> for UsbKeycode {
-    fn from(k: evdev::Key) -> Self {
+impl From<&evdev::Key> for UsbKeycode {
+    fn from(k: &evdev::Key) -> Self {
         UsbKeycode {
-            data: KEYCODE_MAP[k as usize]
+            data: KEYCODE_MAP[*k as usize]
         }
     }
 }
@@ -190,10 +191,30 @@ fn main() {
     let manager = thread::spawn(move || {
         use std::sync::mpsc::RecvTimeoutError::*;
         let mut state: State = State::default();
+        let mut filters: Vec<FilterFn> =
+            vec![Box::new(relaxed_chording),
+                 Box::new(direct_passthrough),
+                 Box::new(direct_report)];
+        let mut prev_loop: SystemTime = SystemTime::now();
+        let mut i: i64 = 0;
+        let mut s: u128 = 0;
         while running.load(Ordering::SeqCst) {
-            let ev = manager_receiver.recv_timeout(Duration::from_millis(10));
+            // let wait_micros =
+            let ev = manager_receiver.recv_timeout(Duration::from_micros(2000));
+
+            i += 1;
+            s += prev_loop.elapsed().unwrap().as_micros();
+            if i % 1000 == 0 && i != 0 {
+                trace!("{} usecs", s / 1000);
+                s = 0;
+            }
+            prev_loop = SystemTime::now();
+
             let ev = match ev {
-                Err(Timeout) => { continue; }
+                Err(Timeout) => {
+                    state.update(&mut filters, &to_writer);
+                    continue;
+                }
                 Err(Disconnected) => { break; }
                 Ok(e) => e
             };
@@ -222,10 +243,7 @@ fn main() {
                                    _ => unreachable!()
                                },
                                time);
-
-                    chording(&mut state, &to_writer);
-                    direct_passthrough(&mut state, &to_writer);
-                    direct_report(&mut state, &to_writer);
+                    state.update(&mut filters, &to_writer);
                 }
             }
         }
@@ -259,5 +277,6 @@ fn main() {
         }
     });
 
+    // TODO: match on Err from manager/reader and send null report
     manager.join().unwrap();
 }

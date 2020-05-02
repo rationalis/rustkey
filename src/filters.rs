@@ -7,31 +7,65 @@ use evdev::Key::*;
 use log::*;
 
 pub type OutChannel<'a> = &'a Sender<Report>;
-pub type FilterFn<'a> = &'a dyn Fn(&mut State, OutChannel);
+pub type FilterFn = Box<dyn FnMut(&mut State, OutChannel)>;
 
-pub fn chording(state: &mut State, writer: OutChannel) {
-    const MAX_WAIT_USECS: usize = 10;
-    const MAX_CHORD_KEYS: usize = 2;
+pub fn relaxed_chording(state: &mut State, writer: OutChannel) {
+    const MAX_WAIT_MSECS: u64 = 10;
+    // TODO
+    // const MAX_CHORD_KEYS: usize = 2;
 
     let (pressed, mut hist) = state.view();
     let chord_keys = [KEY_UP, KEY_LEFT, KEY_RIGHT, KEY_DOWN];
-    let chord_keys: Vec<UsbKeycode> = chord_keys.map(UsbKeycode::from).collect();
+    let chord_keys: Vec<UsbKeycode> =
+        chord_keys.iter().map(UsbKeycode::from).collect();
 
-    let mut pressed_chord_keys = Vec::new();
+    let mut pressed_ck: Vec<&mut PressEvent> = Vec::new();
+    let mut released_ck: Vec<&mut PressEvent> = Vec::new();
 
     for ev in hist.iter_mut().rev() {
         let key = ev.usb_keycode();
         if chord_keys.contains(&key) {
-            ev.handle();
             if ev.pressed() {
-                pressed_chord_keys.push(key);
+                pressed_ck.push(ev);
+            } else {
+                released_ck.push(ev);
             }
         }
     }
 
-    let len = pressed_chord_keys.len();
+    for ev in released_ck.iter_mut().rev() {
+        if ev.keyup_time.unwrap().elapsed().unwrap()
+            > Duration::from_millis(MAX_WAIT_MSECS)
+        {
+            trace!("Wait time elapsed, sending single key");
+            ev.consume();
+            pressed.push(ev.usb_keycode());
+            return;
+        }
+    }
+
+    let len = pressed_ck.len();
     if len > 1 {
-        debug!("{} chord keys pressed simultaneously", len);
+        trace!("{} chord keys pressed simultaneously", len);
+        for ev in pressed_ck {
+            ev.consume();
+            pressed.push(ev.usb_keycode());
+        }
+        return;
+    }
+
+    let len2 = released_ck.len();
+    if len + len2 > 1 {
+        trace!("{} chord keys pressed within wait time", len + len2);
+        for ev in pressed_ck.iter_mut().chain(released_ck.iter_mut()) {
+            ev.consume();
+            pressed.push(ev.usb_keycode());
+        }
+        return;
+    }
+
+    for ev in pressed_ck.iter_mut().chain(released_ck.iter_mut()) {
+        ev.handle();
     }
 }
 
