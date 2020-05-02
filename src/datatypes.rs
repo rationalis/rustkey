@@ -23,8 +23,8 @@ pub struct PressEvent {
 /// This denotes the status of a `PressEvent` for a given frame (i.e. immediately
 /// after the most recent `PressEvent`). If a `PressEvent` has been consumed,
 /// then it should never be rehandled in the future. If a `PressEvent` has been
-/// handled, then it should not be rehandled for a current frame. If a
-/// `PressEvent` is unhandled then it should be handled by the end of the frame.
+/// handled, then it should not be rehandled for the current frame. If a
+/// `PressEvent` is unhandled then it will be handled by the end of the frame.
 /// `State` and the default pipeline respects these conditions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PressStatus {

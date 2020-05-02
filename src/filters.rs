@@ -3,19 +3,24 @@ use crate::*;
 use std::sync::mpsc::Sender;
 use std::time::SystemTime;
 
+use evdev::Key::*;
 use log::*;
 
 pub type OutChannel<'a> = &'a Sender<Report>;
 pub type FilterFn<'a> = &'a dyn Fn(&mut State, OutChannel);
 
 pub fn chording(state: &mut State, writer: OutChannel) {
+    const MAX_WAIT_USECS: usize = 10;
+    const MAX_CHORD_KEYS: usize = 2;
+
     let (pressed, mut hist) = state.view();
-    let chord_keys = [79, 80, 81, 82];
+    let chord_keys = [KEY_UP, KEY_LEFT, KEY_RIGHT, KEY_DOWN];
+    let chord_keys: Vec<UsbKeycode> = chord_keys.map(UsbKeycode::from).collect();
+
     let mut pressed_chord_keys = Vec::new();
 
-    use EventType::*;
     for ev in hist.iter_mut().rev() {
-        let key = ev.usb_keycode().data;
+        let key = ev.usb_keycode();
         if chord_keys.contains(&key) {
             ev.handle();
             if ev.pressed() {

@@ -111,17 +111,29 @@ impl Report {
 }
 
 impl UsbKeycode {
-    fn from_evdev_code(ev: &evdev::raw::input_event) -> UsbKeycode {
+    fn is_modifier(&self) -> bool {
+        self.data >= 224 && self.data <= 231
+    }
+}
+
+impl From<&evdev::raw::input_event> for UsbKeycode {
+    fn from(ev: &evdev::raw::input_event) -> Self {
+        // TODO: handle other non-standard-keyboard keys
         let ev_code: usize = ev.code.try_into().unwrap();
         UsbKeycode {
             data: KEYCODE_MAP[ev_code]
         }
     }
+}
 
-    fn is_modifier(&self) -> bool {
-        self.data >= 224 && self.data <= 231
+impl From<evdev::Key> for UsbKeycode {
+    fn from(k: evdev::Key) -> Self {
+        UsbKeycode {
+            data: KEYCODE_MAP[k as usize]
+        }
     }
 }
+
 
 fn reverse_map(arr: &[u8]) -> [u8; 256] {
     let mut map: [u8; 256] = [0; 256];
@@ -188,7 +200,7 @@ fn main() {
 
             if ev._type == 1 {
                 // let was_empty = state.pressed.is_empty();
-                let usb_keycode = UsbKeycode::from_evdev_code(&ev);
+                let usb_keycode = UsbKeycode::from(&ev);
                 if ev.value == 0 || ev.value == 1 {
                     let secs = ev.time.tv_sec;
                     let usecs = ev.time.tv_usec;
