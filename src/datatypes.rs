@@ -24,8 +24,8 @@ pub struct PressEvent {
 /// after the most recent `PressEvent`). If a `PressEvent` has been consumed,
 /// then it should never be rehandled in the future. If a `PressEvent` has been
 /// handled, then it should not be rehandled for the current frame. If a
-/// `PressEvent` is unhandled then it will be handled by the end of the frame.
-/// `State` and the default pipeline respects these conditions.
+/// `PressEvent` is unhandled then it will be handled or consumed by the end of
+/// the frame. `State` and the default pipeline respects these conditions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PressStatus {
     Consumed,
@@ -51,12 +51,10 @@ impl PressEvent {
     }
 
     pub fn consume(&mut self) {
-        debug_assert!(self.status == Unhandled);
         self.status = Consumed;
     }
 
     pub fn handle(&mut self) {
-        debug_assert!(self.status == Unhandled);
         self.status = Handled;
     }
 

@@ -76,8 +76,6 @@ impl Report {
             225 | 229 => self.mod_byte |= 1 << 1,
             226 | 230 => self.mod_byte |= 1 << 2,
             227 | 231 => self.mod_byte |= 1 << 3,
-            // TODO: handle win(gui) taps; it's dual role by default on windows
-            // TODO: handle holding alt which is needed for alt-tabbing
             _ => panic!("Unrecognized modifier"),
         }
     }
@@ -176,12 +174,11 @@ fn main() {
     let _writer = thread::spawn(move || {
         let mut out: File = OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
         loop {
-            let r = writer_receiver.recv();
-            if r.is_err() {
+            if let Ok(r) = writer_receiver.recv() {
+                out.write(&r.data()).unwrap();
+            } else {
                 break;
             }
-            let r: Report = r.unwrap();
-            out.write(&r.data()).unwrap();
         }
     });
 
@@ -197,7 +194,8 @@ fn main() {
         let mut i: i64 = 0;
         let mut s: u128 = 0;
         while running.load(Ordering::SeqCst) {
-            // let wait_micros =
+            // TODO: Investigate why this lags badly at 500us but not 1ms, even
+            // though the loop body only takes ~150us max.
             let ev = manager_receiver.recv_timeout(Duration::from_micros(2000));
 
             i += 1;
@@ -252,7 +250,7 @@ fn main() {
         to_writer.send(Report::new()).unwrap();
     });
 
-    let reader = thread::spawn(move || 'main: loop {
+    let _reader = thread::spawn(move || 'main: loop {
         for ev in d.events_no_sync().unwrap() {
             let res = to_manager.send(ev);
             if res.is_err() {
@@ -262,13 +260,6 @@ fn main() {
     });
 
     match manager.join() {
-        Err(_) => {
-            to_writer_err.send(Report::new()).unwrap();
-        }
-        _ => (),
-    }
-
-    match reader.join() {
         Err(_) => {
             to_writer_err.send(Report::new()).unwrap();
         }

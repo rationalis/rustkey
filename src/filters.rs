@@ -8,7 +8,8 @@ pub type OutChannel<'a> = &'a Sender<Report>;
 pub type FilterFn = Box<dyn FnMut(&mut State, OutChannel)>;
 
 pub fn relaxed_chording(state: &mut State, _writer: OutChannel) {
-    const MAX_WAIT_MSECS: u64 = 10;
+    const MAX_WAIT_MSECS: u64 = 4;
+    const MAX_WAIT: Duration = Duration::from_millis(MAX_WAIT_MSECS);
     // TODO
     // const MAX_CHORD_KEYS: usize = 2;
 
@@ -19,9 +20,10 @@ pub fn relaxed_chording(state: &mut State, _writer: OutChannel) {
     let mut pressed_ck: Vec<&mut PressEvent> = Vec::new();
     let mut released_ck: Vec<&mut PressEvent> = Vec::new();
 
-    for ev in hist.iter_mut().rev() {
-        let key = ev.usb_keycode();
-        if chord_keys.contains(&key) {
+    // History is in order of oldest pressed first.
+    for ev in hist.iter_mut() {
+        if chord_keys.contains(&ev.usb_keycode()) {
+            ev.handle();
             if ev.pressed() {
                 pressed_ck.push(ev);
             } else {
@@ -30,8 +32,8 @@ pub fn relaxed_chording(state: &mut State, _writer: OutChannel) {
         }
     }
 
-    for ev in released_ck.iter_mut().rev() {
-        if ev.keyup_time.unwrap().elapsed().unwrap() > Duration::from_millis(MAX_WAIT_MSECS) {
+    for ev in released_ck.iter_mut() {
+        if ev.keyup_time.unwrap().elapsed().unwrap() > MAX_WAIT {
             trace!("Wait time elapsed, sending single key");
             ev.consume();
             pressed.push(ev.usb_keycode());
@@ -58,10 +60,6 @@ pub fn relaxed_chording(state: &mut State, _writer: OutChannel) {
         }
         return;
     }
-
-    for ev in pressed_ck.iter_mut().chain(released_ck.iter_mut()) {
-        ev.handle();
-    }
 }
 
 pub fn direct_passthrough(state: &mut State, _writer: OutChannel) {
@@ -69,12 +67,11 @@ pub fn direct_passthrough(state: &mut State, _writer: OutChannel) {
     let (pressed, mut hist) = state.view();
 
     for ev in hist.iter_mut().rev() {
-        let keycode = ev.usb_keycode();
         if ev.released() {
             ev.consume();
         } else {
             ev.handle();
-            pressed.push(keycode);
+            pressed.push(ev.sim_keycode);
         }
     }
     trace!("{:?}", state);
