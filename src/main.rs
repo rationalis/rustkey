@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ctrlc;
 use lazy_static::lazy_static;
 use log::*;
 use simplelog::*;
@@ -70,7 +69,7 @@ impl Report {
         Report { mod_byte: 0, keys }
     }
 
-    fn set_modifier(&mut self, m: &UsbKeycode) {
+    fn set_modifier(&mut self, m: UsbKeycode) {
         match m.data {
             224 | 228 => self.mod_byte |= 1 << 0,
             225 | 229 => self.mod_byte |= 1 << 1,
@@ -82,7 +81,7 @@ impl Report {
 
     fn add_key(&mut self, key: UsbKeycode) {
         if key.is_modifier() {
-            self.set_modifier(&key);
+            self.set_modifier(key);
             return;
         }
 
@@ -107,7 +106,7 @@ impl Report {
 }
 
 impl UsbKeycode {
-    fn is_modifier(&self) -> bool {
+    fn is_modifier(self) -> bool {
         self.data >= 224 && self.data <= 231
     }
 }
@@ -139,23 +138,23 @@ fn reverse_map(arr: &[u8]) -> [u8; 256] {
 }
 
 fn main() {
-    let _ = SimpleLogger::init(LevelFilter::Debug, Config::default()).unwrap();
+    SimpleLogger::init(LevelFilter::Debug, Config::default()).unwrap();
 
     let mut args = std::env::args_os();
-    let mut d;
-    if args.len() > 1 {
-        d = evdev::Device::open(&args.nth(1).unwrap()).unwrap();
-    } else {
-        let mut devices = evdev::enumerate();
-        for (i, d) in devices.iter().enumerate() {
-            println!("{}: {:?}", i, d.name());
-        }
-        print!("Select the device [0-{}]: ", devices.len());
-        let _ = std::io::stdout().flush();
-        let mut chosen = String::new();
-        std::io::stdin().read_line(&mut chosen).unwrap();
-        d = devices.swap_remove(chosen.trim().parse::<usize>().unwrap());
-    }
+    let mut d =
+        if args.len() > 1 {
+            evdev::Device::open(&args.nth(1).unwrap()).unwrap()
+        } else {
+            let mut devices = evdev::enumerate();
+            for (i, d) in devices.iter().enumerate() {
+                println!("{}: {:?}", i, d.name());
+            }
+            print!("Select the device [0-{}]: ", devices.len());
+            let _ = std::io::stdout().flush();
+            let mut chosen = String::new();
+            std::io::stdin().read_line(&mut chosen).unwrap();
+            devices.swap_remove(chosen.trim().parse::<usize>().unwrap())
+        };
     println!("{}", d);
     println!("Events:");
 
@@ -173,12 +172,8 @@ fn main() {
 
     let _writer = thread::spawn(move || {
         let mut out: File = OpenOptions::new().write(true).open("/dev/hidg0").unwrap();
-        loop {
-            if let Ok(r) = writer_receiver.recv() {
-                out.write(&r.data()).unwrap();
-            } else {
-                break;
-            }
+        while let Ok(r) = writer_receiver.recv() {
+            out.write_all(&r.data()).unwrap();
         }
     });
 
@@ -259,10 +254,7 @@ fn main() {
         }
     });
 
-    match manager.join() {
-        Err(_) => {
-            to_writer_err.send(Report::new()).unwrap();
-        }
-        _ => (),
+    if manager.join().is_err() {
+        to_writer_err.send(Report::new()).unwrap();
     }
 }
