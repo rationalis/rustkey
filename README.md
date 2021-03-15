@@ -37,6 +37,7 @@ useful tool for that niche, enabling transparent, multi-keyboard, cross-platform
 There are some disadvantages:
 - Unlike a traditional microcontroller, the controller Linux PC cannot directly access keyboard internals. While it is certainly
 possible to do so with additional setup, raw analog IO is out of scope for the foreseeable future.
+- By acting as a proxy, the controller Linux PC adds up to ~1.5ms of latency. This could potentially be reduced to ~0.5ms of latency, if both ends were using USB3 with the highest available polling rate. This is almost negligible either way. However, by comparison, a custom microcontroller/firmware [can *reduce* latency to sub-millisecond scales](https://michael.stapelberg.ch/posts/2018-04-17-kinx-keyboard-controller/#next-up), which could mean *dozens* of milliseconds of savings.
 - Much greater power consumption, compared to simple microcontrollers.
 - Any behavior not directly tied to direct keyboard IO, such as detecting the currently focused window, cannot be accessed without
 additional setup, unlike platform-specific software tools.
